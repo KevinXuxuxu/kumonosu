@@ -177,6 +177,7 @@ class KumoMaster:
                         self._put_back(w.job['targets'])
                 elif w.status == UNHEALTHY:
                     # TODO: add bring back alive
+                    # TODO: add kill
                     pass
                 else:
                     Logger.warning("Unrecognized worker status: " + w.status)
