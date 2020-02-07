@@ -18,7 +18,7 @@ def import_code(code, name):
     exec(code, module.__dict__)
     return module.__dict__[name]
 
-class Crawler:
+class Kumo:
     thread = None
     result = Queue()
     headers = {"User-Agent": UserAgent().random}
@@ -54,7 +54,7 @@ class Crawler:
         return result
 
 
-kumo = Crawler()
+kumo = Kumo()
 
 app = Flask(__name__)
 
