@@ -21,7 +21,7 @@ UNVISITED = 0
 TAKEN = 1
 FINISHED = 2
 
-WORKER_ROTATE_TIME = 60  # sec
+WORKER_ROTATE_TIME = 3  # sec
 WORKER_PULL_TIMEOUT = 10  # sec
 WORKER_UNHEALTHY_THRESHOLD = 5
 
@@ -38,13 +38,13 @@ class KumoWorker:
         Logger.warning(msg)
         self.fail_count += 1
         if self.fail_count == 5:
-            Logger.warning("Worker {} is unhealthy!".format(self.endpoint))
+            Logger.warning("Worker-{} {} is unhealthy!".format(self.id, self.endpoint))
             self.fail_count = 0
             self.status = UNHEALTHY
     
     def _call(self, method, route, data=None):
         try:
-            res = rq.request(method, self.endpoint + route, data=data, timeout=WORKER_PULL_TIMEOUT)
+            res = rq.request(method, self.endpoint + route, json=data, timeout=WORKER_PULL_TIMEOUT)
         except Exception as e:
             self._fail("Exception when pulling from {}\n\t\t{}".format(self.endpoint, e))
             return None, False
@@ -56,7 +56,7 @@ class KumoWorker:
 
     def init(self):
         # TODO: start worker in AWS EC2 instance
-        self.endpoint = 'https://localhost:808{}'.format(self.id)
+        self.endpoint = 'http://localhost:808{}'.format(self.id)
         self.status = INIT
         return True
 
@@ -74,9 +74,13 @@ class KumoWorker:
         return result['result'], True
 
     def assign(self, job):
-        _, successful = self._call('POST', '/assign', data=job)
+        res, successful = self._call('POST', '/assign', data=job)
         if successful:
             self.status = WORKING
+            if res.json()['already_working']:
+                Logger.warning('Worker already working!')
+                return False
+        self.job = job
         return successful
 
 
@@ -86,6 +90,9 @@ class TempKVStore:
 
     def available(self, k):
         return self.d[k] == UNVISITED
+    
+    def taken(self, k):
+        return self.d[k] == TAKEN
 
     def take(self, k):
         self.d[k] = TAKEN
@@ -132,19 +139,20 @@ class KumoMaster:
 
     def _put_back(self, job):
         for t in job:
-            self.kv_store.put_back(t)
+            if self.kv_store.taken(t):
+                self.kv_store.put_back(t)
 
     def _output(self, target, result):
         self.file.write("{},{}\n".format(target, result))
         self.file.flush()
 
     def _func_to_code(self, func):
-        return inspect.getsource(func)
+        return inspect.getsource(func).strip()
     
     def run(self):
         while True:
             for w in self.workers:
-                if w.status in [UNHEALTHY, INIT_FAILED]:
+                if w.status in [INIT_FAILED]:
                     # TODO: handle these cases
                     pass
                 elif w.status == IDLE:
@@ -152,15 +160,24 @@ class KumoMaster:
                         w.status = INIT
                 elif w.status in [INIT, WAIT]:
                     job = self._get_job()
-                    if job:
-                        _, ok = w.assign(job)
+                    if job['targets'] != []:
+                        ok = w.assign(job)
                         if not ok:
                             self._put_back(job['targets'])
+                    else:
+                        Logger.info("Crawling finished!")
+                        break
                 elif w.status == WORKING:
                     result, successful = w.pull()
                     if successful:
                         for t in result:
                             self._output(t, result[t])
                             self.kv_store.finish(t)
+                    if w.status == UNHEALTHY:
+                        self._put_back(w.job['targets'])
+                elif w.status == UNHEALTHY:
+                    # TODO: add bring back alive
+                    pass
                 else:
-                    logging.warning("Unrecognized worker status: " + w.status)
+                    Logger.warning("Unrecognized worker status: " + w.status)
+                sleep(self.check_interval)
