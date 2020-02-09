@@ -14,7 +14,9 @@ REQUEST_TIMEOUT = 30
 Logger = logging.getLogger()
 
 
-def import_code(code, name):
+def import_code(_input):
+    code = _input['code']
+    name = _input['name']
     module = imp.new_module('tmp_module')
     exec(code, module.__dict__)
     return module.__dict__[name]
@@ -43,7 +45,7 @@ class Kumo:
     def crawl(self, targets, processor):
         if self.working():
             return True
-        process = import_code(processor, 'process')
+        process = import_code(processor)
         self.thread = Thread(target=self._crawl, args=[targets, process, lambda: self.stop])
         self.thread.start()
         Logger.info("New crawler thread: {}".format(self.thread))

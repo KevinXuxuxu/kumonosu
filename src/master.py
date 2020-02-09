@@ -114,11 +114,23 @@ class TempKVStore:
 
 class KumoMaster:
 
-    def __init__(self, pool_size, targets, processor, chunk_size=5, output='result.csv', flat=False):
+    def __init__(
+        self,
+        pool_size,
+        targets,
+        processor,
+        process_name,
+        chunk_size=5,
+        output='result.csv',
+        flat=False
+    ):
         self.targets = targets
         self.target_pointer = 0
         self.chunk_size = chunk_size
-        self.processor = self._func_to_code(processor)
+        self.processor = {
+            'code': self._func_to_code(processor),
+            'name': process_name
+        }
         self.flat = flat
 
         self.pool_size = pool_size
