@@ -114,11 +114,12 @@ class TempKVStore:
 
 class KumoMaster:
 
-    def __init__(self, pool_size, targets, processor, chunk_size=5, output='result.csv'):
+    def __init__(self, pool_size, targets, processor, chunk_size=5, output='result.csv', flat=False):
         self.targets = targets
         self.target_pointer = 0
         self.chunk_size = chunk_size
-        self.processor=self._func_to_code(processor)
+        self.processor = self._func_to_code(processor)
+        self.flat = flat
 
         self.pool_size = pool_size
         self.workers = []
@@ -151,8 +152,13 @@ class KumoMaster:
                 self.kv_store.put_back(t)
 
     def _output(self, target, result):
-        self.file.write("{},{}\n".format(target, result))
-        self.file.flush()
+        if self.flat:
+            for r in result:
+                self.file.write("{},{}\n".format(target, r))
+                self.file.flush()
+        else:
+            self.file.write("{},{}\n".format(target, result))
+            self.file.flush()
 
     def _func_to_code(self, func):
         return inspect.getsource(func).strip()
