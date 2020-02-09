@@ -7,6 +7,7 @@ from queue import Queue
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 from threading import Thread
+from multiprocessing import Process
 
 REQUEST_TIMEOUT = 30
 
@@ -22,9 +23,12 @@ class Kumo:
     thread = None
     result = Queue()
     headers = {"User-Agent": UserAgent().random}
+    stop = False
 
-    def _crawl(self, targets, process):  # this should not throw
+    def _crawl(self, targets, process, stoped):  # this should not throw
         for t in targets:
+            if stoped():
+                break
             try:
                 res = rq.get(t, headers=self.headers, timeout=REQUEST_TIMEOUT)
                 soup = BeautifulSoup(res.text, "html.parser")
@@ -40,7 +44,7 @@ class Kumo:
         if self.working():
             return True
         process = import_code(processor, 'process')
-        self.thread = Thread(target=self._crawl, args=[targets, process])
+        self.thread = Thread(target=self._crawl, args=[targets, process, lambda: self.stop])
         self.thread.start()
         Logger.info("New crawler thread: {}".format(self.thread))
         print(self.thread)
@@ -52,6 +56,14 @@ class Kumo:
             t, data = self.result.get()
             result[t] = data
         return result
+
+    def kill(self):
+        if self.thread is not None and self.thread.is_alive():
+            self.stop = True
+            self.thread.join()  # might wait for one cycle to finish
+            self.stop = False
+        while not self.result.empty():
+            self.result.get()
 
 
 kumo = Kumo()
@@ -76,3 +88,8 @@ def assign():  # skinny-dip
 @app.route('/isworking', methods=['GET'])
 def isworking():
     return jsonify({'result': kumo.working()})
+
+@app.route('/kill', methods=['GET'])
+def kill():
+    kumo.kill()
+    return 'ok'

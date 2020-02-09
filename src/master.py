@@ -5,7 +5,7 @@ import inspect
 from collections import defaultdict
 from time import sleep
 
-logging.basicConfig(format='%(asctime)-15s  %(message)s')
+logging.basicConfig(format='%(asctime)-15s  %(message)s', level=logging.INFO)
 Logger = logging.getLogger('KumoDriver')
 
 # Worker status
@@ -71,7 +71,7 @@ class KumoWorker:
                 self.endpoint, result))
         if result['finished']:
             self.status = WAIT
-        return result['result'], True
+        return result, True
 
     def assign(self, job):
         res, successful = self._call('POST', '/assign', data=job)
@@ -83,6 +83,11 @@ class KumoWorker:
         self.job = job
         return successful
 
+    def kill(self):
+        _, successful = self._call('GET', '/kill')
+        if successful:
+            self.status = WAIT
+
 
 # TODO: Move to cloud based KVStore
 class TempKVStore:
@@ -93,6 +98,9 @@ class TempKVStore:
     
     def taken(self, k):
         return self.d[k] == TAKEN
+    
+    def finished(self, k):
+        return self.d[k] == FINISHED
 
     def take(self, k):
         self.d[k] = TAKEN
@@ -148,10 +156,17 @@ class KumoMaster:
 
     def _func_to_code(self, func):
         return inspect.getsource(func).strip()
+
+    def _finished(self):
+        return all(self.kv_store.finished(t) for t in self.targets)
     
     def run(self):
         while True:
+            if self._finished():
+                Logger.info("Crawling finished!")
+                break
             for w in self.workers:
+                Logger.info("worker {} in status {}".format(w.endpoint, w.status))
                 if w.status in [INIT_FAILED]:
                     # TODO: handle these cases
                     pass
@@ -164,21 +179,19 @@ class KumoMaster:
                         ok = w.assign(job)
                         if not ok:
                             self._put_back(job['targets'])
-                    else:
-                        Logger.info("Crawling finished!")
-                        break
                 elif w.status == WORKING:
-                    result, successful = w.pull()
+                    response, successful = w.pull()
                     if successful:
-                        for t in result:
-                            self._output(t, result[t])
+                        for t in response['result']:
+                            self._output(t, response['result'][t])
                             self.kv_store.finish(t)
+                        if response['finished']:
+                            self._put_back(w.job['targets'])
                     if w.status == UNHEALTHY:
                         self._put_back(w.job['targets'])
                 elif w.status == UNHEALTHY:
-                    # TODO: add bring back alive
-                    # TODO: add kill
-                    pass
+                    w.kill()
                 else:
                     Logger.warning("Unrecognized worker status: " + w.status)
                 sleep(self.check_interval)
+        self.file.close()
