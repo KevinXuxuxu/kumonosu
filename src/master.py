@@ -2,11 +2,16 @@ import sys
 import requests as rq
 import logging
 import inspect
+import json
 from collections import defaultdict
 from time import sleep
 
 logging.basicConfig(format='%(asctime)-15s  %(message)s', level=logging.INFO)
 Logger = logging.getLogger('KumoDriver')
+
+#Mode
+LOCAL = 'LOCAL'
+AWS_MANUAL = 'AWS_MANUAL'
 
 # Worker status
 IDLE = 'IDLE'
@@ -24,6 +29,7 @@ FINISHED = 2
 WORKER_ROTATE_TIME = 3  # sec
 WORKER_PULL_TIMEOUT = 10  # sec
 WORKER_UNHEALTHY_THRESHOLD = 5
+
 
 class KumoWorker:
 
@@ -54,9 +60,12 @@ class KumoWorker:
             return None, False
         return res, True
 
-    def init(self):
+    def init(self, mode=LOCAL):
         # TODO: start worker in AWS EC2 instance
-        self.endpoint = 'http://localhost:808{}'.format(self.id)
+        if mode == LOCAL:
+            self.endpoint = 'http://localhost:808{}'.format(self.id)
+        elif mode == AWS_MANUAL:
+            self.reload()
         self.status = INIT
         return True
 
@@ -87,6 +96,10 @@ class KumoWorker:
         _, successful = self._call('GET', '/kill')
         if successful:
             self.status = WAIT
+
+    def reload(self):
+        """Reload aws ec2 endpoints from endpoints.json file"""
+        self.endpoint = json.load(open("endpoints.json"))['endpoints'][self.id]
 
 
 # TODO: Move to cloud based KVStore
@@ -122,7 +135,8 @@ class KumoMaster:
         process_name,
         chunk_size=5,
         output='result.csv',
-        flat=False
+        flat=False,
+        mode=LOCAL
     ):
         self.targets = targets
         self.target_pointer = 0
@@ -136,6 +150,7 @@ class KumoMaster:
         self.pool_size = pool_size
         self.workers = []
         self.check_interval = WORKER_ROTATE_TIME / self.pool_size
+        self.mode = mode
 
         self.kv_store = TempKVStore()
 
@@ -146,7 +161,7 @@ class KumoMaster:
         
         # Initializing workers
         for w in self.workers:
-            w.init()
+            w.init(self.mode)
 
     def _get_job(self):
         job = []
@@ -164,7 +179,7 @@ class KumoMaster:
                 self.kv_store.put_back(t)
 
     def _output(self, target, result):
-        if self.flat:
+        if self.flat and isinstance(result, list):
             for r in result:
                 self.file.write("{},{}\n".format(target, r))
                 self.file.flush()
@@ -200,14 +215,18 @@ class KumoMaster:
                 elif w.status == WORKING:
                     response, successful = w.pull()
                     if successful:
-                        for t in response['result']:
-                            self._output(t, response['result'][t])
-                            self.kv_store.finish(t)
+                        result = response['result']
+                        for t in result:
+                            if result[t]['ok']:
+                                self._output(t, result[t]['data'])
+                                self.kv_store.finish(t)
                         if response['finished']:
                             self._put_back(w.job['targets'])
                     if w.status == UNHEALTHY:
                         self._put_back(w.job['targets'])
                 elif w.status == UNHEALTHY:
+                    if self.mode == AWS_MANUAL:
+                        w.reload()
                     w.kill()
                 else:
                     Logger.warning("Unrecognized worker status: " + w.status)

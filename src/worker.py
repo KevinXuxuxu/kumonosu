@@ -34,10 +34,10 @@ class Kumo:
             try:
                 res = rq.get(t, headers=self.headers, timeout=REQUEST_TIMEOUT)
                 soup = BeautifulSoup(res.text, "html.parser")
-                self.result.put((t, process(soup)))
+                self.result.put((t, process(soup), True))
             except Exception as e:
                 Logger.warning("Request failed: " + str(e))
-                self.result.put((t, "Request failed: " + str(e)))
+                self.result.put((t, "Request failed: " + str(e), False))
 
     def working(self):
         return self.thread is not None and self.thread.is_alive()
@@ -55,8 +55,8 @@ class Kumo:
     def flush_result(self):
         result = {}
         while not self.result.empty():
-            t, data = self.result.get()
-            result[t] = data
+            t, data, ok = self.result.get()
+            result[t] = {'data': data, 'ok': ok}
         return result
 
     def kill(self):
